@@ -3,21 +3,19 @@ GENERADOR DE INFORMES DE LABORATORIO - UNJBG (APA 7.ª EDICIÓN)
 Aplicación web interactiva desarrollada en Python + Streamlit para la
 Universidad Nacional Jorge Basadre Grohmann (Tacna, Perú).
 
-Funcionalidades clave:
-1. Autocompletado inteligente con advertencia visible en apartados importantes vacíos:
-   - Si apartados fundamentales como 1. Resumen, 2. Introducción, 4. Resultados y Discusión,
-     5. Conclusiones o 6. Reflexión Argumentada se dejan sin llenar, el sistema redacta
-     automáticamente una propuesta académica contextualizada a partir del título de la práctica,
-     laboratorio, escuela profesional, objetivos y datos/gráficos ingresados, colocando una
-     ADVERTENCIA VISIBLE al inicio del apartado (y un aviso resumen al inicio del cuerpo) para
-     que el estudiante lo revise y valide antes de su entrega.
-2. Omisión limpia de apartados y campos opcionales vacíos:
-   - Cuestionario (Opcional), Apéndices (Opcional), Fuentes de error (opcional), campos opcionales
-     de carátula, tablas sin datos y figuras sin imagen desaparecen del Word final sin dejar
-     espacios vacíos ni títulos huérfanos.
-3. Generador integrado de gráficos científicos APA 7 (300 DPI):
-   - Dispersión + Ajuste Lineal por Mínimos Cuadrados (y = mx + b, R²), Líneas Comparativas
-     y Barras Comparativas.
+Novedades en esta versión (v5):
+1. Importación inteligente desde archivo Word (.docx):
+   - Sube cualquier avance, guía o informe previo en formato .docx y la aplicación detecta
+     automáticamente los datos de la carátula, autores, tablas, figuras y cada apartado
+     (Resumen, Introducción, Objetivos, Materiales, Procedimiento, Resultados y Discusión,
+     Conclusiones, Fuentes de error, Reflexión, Referencias, Cuestionario y Apéndices)
+     para rellenar el formulario con un solo clic.
+2. Tablas editables estables (sin reinicio en la primera celda):
+   - Sincronización persistente en sesión para que cada celda editada se conserve desde el
+     primer ingreso sin borrarse al recargar.
+3. Autocompletado con advertencia visible en apartados importantes vacíos y omisión limpia
+   de apartados opcionales vacíos al exportar a Word (.docx).
+4. Generador integrado de gráficos científicos APA 7 (300 DPI).
 """
 
 import io
@@ -26,6 +24,7 @@ import re
 import json
 import math
 import base64
+import unicodedata
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
@@ -36,6 +35,8 @@ from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
+from docx.text.paragraph import Paragraph
+from docx.table import Table
 
 # ==============================================================================
 # BLOQUE 1: CONFIGURACIÓN INSTITUCIONAL UNJBG Y REGLAS APA 7.ª EDICIÓN
@@ -178,6 +179,16 @@ def limpiar_texto_placeholder(texto: str) -> str:
     return t
 
 
+def _normalizar_clave(texto: str) -> str:
+    """Convierte texto a minúsculas sin tildes ni signos para detección tolerante de encabezados."""
+    if not texto:
+        return ""
+    s = unicodedata.normalize("NFD", texto.strip().lower())
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    s = re.sub(r"[^a-z0-9\s\.\:]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def calcular_regresion_lineal(x_vals: list, y_vals: list) -> dict:
     """Calcula ajuste lineal y = m*x + b por mínimos cuadrados con incertezas estándar."""
     n = len(x_vals)
@@ -209,7 +220,465 @@ def calcular_regresion_lineal(x_vals: list, y_vals: list) -> dict:
 
 
 # ==============================================================================
-# BLOQUE 1B: GENERADOR INTELIGENTE DE APARTADOS IMPORTANTES FALTANTES
+# BLOQUE 1B: IMPORTADOR INTELIGENTE DE ARCHIVOS WORD (.DOCX)
+# ==============================================================================
+
+def _iterar_bloques_docx(doc):
+    """Itera los párrafos y tablas de un documento Word en su orden exacto de aparición."""
+    body = doc.element.body
+    for child in body.iterchildren():
+        if child.tag.endswith("}p"):
+            yield ("p", Paragraph(child, doc))
+        elif child.tag.endswith("}tbl"):
+            yield ("tbl", Table(child, doc))
+
+
+def _extraer_imagen_de_parrafo(doc, paragraph) -> str:
+    """Si el párrafo contiene una imagen embebida, devuelve su Base64; de lo contrario ''."""
+    try:
+        blips = paragraph._p.xpath(".//*[local-name()='blip']")
+        if not blips:
+            return ""
+        r_embed = blips[0].get("{http://schemas.openxmlformats.org/officeDocument/2006/main}embed")
+        if not r_embed:
+            for k, v in blips[0].attrib.items():
+                if k.endswith("}embed"):
+                    r_embed = v
+                    break
+        if not r_embed or r_embed not in doc.part.related_parts:
+            return ""
+        img_part = doc.part.related_parts[r_embed]
+        return base64.b64encode(img_part.blob).decode("ascii")
+    except Exception:
+        return ""
+
+
+def _detectar_seccion_encabezado(texto_orig: str) -> str | None:
+    """
+    Identifica si un párrafo corresponde a un título de sección o subsección del informe.
+    Devuelve la clave interna de sección o None si es un párrafo normal.
+    """
+    t = texto_orig.strip()
+    if not t or len(t) > 110:
+        return None
+    norm = _normalizar_clave(t)
+    # Quitar numeración inicial tipo "1.", "2.", "3.1", "iv.", etc.
+    sin_num = re.sub(r"^(?:[ivx]+|\d+(?:\.\d+)?)\s*[\.\)\-\:]?\s*", "", norm).strip()
+
+    # Subsecciones específicas
+    if re.match(r"^3\.1\b", norm) or sin_num in ("materiales", "materiales y equipos", "equipos y materiales", "materiales e instrumentos"):
+        return "materiales"
+    if re.match(r"^3\.2\b", norm) or sin_num in ("procedimiento", "procedimiento experimental", "metodologia", "desarrollo experimental"):
+        return "procedimiento"
+    if sin_num in ("objetivos", "objetivos de la practica"):
+        return "objetivos_header"
+    if sin_num in ("objetivos especificos", "objetivos especificos:"):
+        return "objetivos_esp_header"
+
+    # Secciones principales
+    if re.match(r"^1\s*[\.\)\-]\s*resumen\b", norm) or sin_num in ("resumen", "abstract", "resumen ejecutivo"):
+        return "resumen"
+    if re.match(r"^2\s*[\.\)\-]\s*introduccion\b", norm) or sin_num in ("introduccion", "fundamento teorico", "marco teorico", "base teorica"):
+        return "introduccion"
+    if re.match(r"^3\s*[\.\)\-]\s*materiales", norm) or sin_num in ("materiales y desarrollo experimental", "materiales y metodos", "materiales y metodo"):
+        return "sec3_general"
+    if re.match(r"^4\s*[\.\)\-]\s*resultados", norm) or sin_num in ("resultados y discusion", "resultados", "analisis de resultados", "datos y resultados"):
+        return "resultados"
+    if re.match(r"^5\s*[\.\)\-]\s*conclusiones", norm) or sin_num in ("conclusiones", "conclusiones y recomendaciones"):
+        return "conclusiones"
+    if re.match(r"^6\s*[\.\)\-]\s*reflexion", norm) or sin_num in ("reflexion argumentada", "reflexion", "aplicacion profesional"):
+        return "reflexion"
+    if re.match(r"^7\s*[\.\)\-]\s*(?:referencias|bibliografia)", norm) or sin_num in ("referencias", "referencias bibliograficas", "bibliografia"):
+        return "referencias"
+    if re.match(r"^8\s*[\.\)\-]\s*cuestionario", norm) or sin_num in ("cuestionario", "preguntas", "actividad"):
+        return "cuestionario"
+    if re.match(r"^9\s*[\.\)\-]\s*(?:apendices|anexos)", norm) or sin_num in ("apendices", "apendice", "anexos", "anexo"):
+        return "apendices"
+
+    return None
+
+
+def _mapear_tabla_materiales(headers: list, rows: list) -> list[dict]:
+    """Convierte una tabla genérica de Word al formato estructurado de materialesTabla."""
+    mapeo = []
+    idx_nombre, idx_marca, idx_rango, idx_aprec, idx_cant = None, None, None, None, None
+    for j, h in enumerate(headers):
+        hn = _normalizar_clave(h)
+        if any(k in hn for k in ("equipo", "material", "instrumento", "reactivo", "descripcion")):
+            idx_nombre = j
+        elif any(k in hn for k in ("marca", "modelo")):
+            idx_marca = j
+        elif "rango" in hn:
+            idx_rango = j
+        elif any(k in hn for k in ("apreciacion", "incerteza", "resolucion", "sensibilidad")):
+            idx_aprec = j
+        elif any(k in hn for k in ("cant", "cantidad", "unid")):
+            idx_cant = j
+
+    # Si no se reconocieron encabezados explícitos, asumir columnas posicionales
+    if idx_nombre is None:
+        tiene_indice_n = len(headers) > 1 and _normalizar_clave(headers[0]) in ("n", "n°", "no", "item", "#")
+        offset = 1 if tiene_indice_n else 0
+        idx_nombre = offset if len(headers) > offset else 0
+        idx_marca = offset + 1 if len(headers) > offset + 1 else None
+        idx_rango = offset + 2 if len(headers) > offset + 2 else None
+        idx_aprec = offset + 3 if len(headers) > offset + 3 else None
+        idx_cant = offset + 4 if len(headers) > offset + 4 else None
+
+    for r in rows:
+        def get_c(idx):
+            return r[idx].strip() if (idx is not None and idx < len(r)) else ""
+
+        item = {
+            "nombre": get_c(idx_nombre),
+            "marca": get_c(idx_marca),
+            "rango": get_c(idx_rango),
+            "apreciacion": get_c(idx_aprec),
+            "cantidad": get_c(idx_cant),
+        }
+        if any(item.values()):
+            mapeo.append(item)
+    return mapeo
+
+
+def importar_desde_docx(docx_bytes: bytes) -> tuple[dict, dict]:
+    """
+    Lee un archivo Word (.docx) y extrae automáticamente sus secciones, metadatos de carátula,
+    tablas, figuras, referencias y cuestionario para poblar el estado completo del informe.
+    Devuelve (nuevo_estado_informe, resumen_deteccion).
+    """
+    doc = Document(io.BytesIO(docx_bytes))
+    estado = obtener_estado_inicial()
+    c = estado["caratula"]
+
+    seccion_actual = "caratula"
+    en_autores = False
+    en_objetivos_esp = False
+
+    parrafos_buffer = {
+        "resumen": [],
+        "introduccion": [],
+        "materiales": [],
+        "procedimiento": [],
+        "resultados": [],
+        "conclusiones": [],
+        "reflexion": [],
+        "referencias": [],
+        "apendices": [],
+    }
+    autores_detectados = []
+    objs_esp_detectados = []
+    cuestionario_detectado = []
+    pregunta_actual = None
+
+    pendiente_titulo_tabla = ""
+    pendiente_titulo_figura = ""
+    ultima_entidad_insertada = None  # ('tabla_mat'|'tabla_cruda'|'tabla_res'|'fig1'|'fig2')
+    tablas_detectadas_count = 0
+    figuras_detectadas_count = 0
+
+    for tipo_bloque, bloque in _iterar_bloques_docx(doc):
+        if tipo_bloque == "p":
+            txt_raw = bloque.text or ""
+            txt = txt_raw.strip()
+
+            # Revisar si el párrafo trae una imagen embebida
+            img_b64 = _extraer_imagen_de_parrafo(doc, bloque)
+            if img_b64 and seccion_actual != "caratula":
+                if seccion_actual in ("procedimiento", "sec3_general", "materiales") and not estado["figura1Img"]:
+                    estado["figura1Img"] = img_b64
+                    if pendiente_titulo_figura:
+                        estado["figura1Desc"] = pendiente_titulo_figura
+                        pendiente_titulo_figura = ""
+                    ultima_entidad_insertada = "fig1"
+                    figuras_detectadas_count += 1
+                elif not estado["figura2Img"]:
+                    estado["figura2Img"] = img_b64
+                    if pendiente_titulo_figura:
+                        estado["figura2Desc"] = pendiente_titulo_figura
+                        pendiente_titulo_figura = ""
+                    ultima_entidad_insertada = "fig2"
+                    figuras_detectadas_count += 1
+
+            if not txt:
+                continue
+
+            # Ignorar cajas de advertencia autogeneradas si se re-sube un Word del sistema
+            if txt.startswith("⚠") or txt.startswith("ADVERTENCIA: Este apartado fue generado") or txt.startswith("AVISO DE AUTOCOMPLETADO:"):
+                continue
+
+            # Detectar cambio de sección
+            nueva_sec = _detectar_seccion_encabezado(txt)
+            if nueva_sec is not None:
+                en_autores = False
+                pendiente_titulo_tabla = ""
+                pendiente_titulo_figura = ""
+                if nueva_sec == "objetivos_header":
+                    seccion_actual = "introduccion"
+                    en_objetivos_esp = False
+                elif nueva_sec == "objetivos_esp_header":
+                    seccion_actual = "introduccion"
+                    en_objetivos_esp = True
+                elif nueva_sec == "sec3_general":
+                    seccion_actual = "materiales"
+                    en_objetivos_esp = False
+                else:
+                    seccion_actual = nueva_sec
+                    en_objetivos_esp = False
+                continue
+
+            # Detectar etiquetas APA 7 de Tabla X / Figura X / Nota.
+            if re.match(r"^Tabla\s+\d+\s*$", txt, flags=re.IGNORECASE):
+                pendiente_titulo_tabla = "__ESPERANDO_TITULO_TABLA__"
+                continue
+            if pendiente_titulo_tabla == "__ESPERANDO_TITULO_TABLA__":
+                pendiente_titulo_tabla = txt
+                continue
+
+            if re.match(r"^Figura\s+\d+\s*$", txt, flags=re.IGNORECASE):
+                pendiente_titulo_figura = "__ESPERANDO_TITULO_FIGURA__"
+                continue
+            if pendiente_titulo_figura == "__ESPERANDO_TITULO_FIGURA__":
+                pendiente_titulo_figura = txt
+                continue
+
+            if re.match(r"^Nota\.\s+", txt) and ultima_entidad_insertada:
+                if ultima_entidad_insertada == "tabla_mat":
+                    estado["notaTablaMateriales"] = txt
+                elif ultima_entidad_insertada == "tabla_cruda":
+                    estado["notaTablaCruda"] = txt
+                elif ultima_entidad_insertada == "tabla_res":
+                    estado["notaTablaResultados"] = txt
+                elif ultima_entidad_insertada == "fig1":
+                    estado["figura1Nota"] = txt
+                elif ultima_entidad_insertada == "fig2":
+                    estado["figura2Nota"] = txt
+                ultima_entidad_insertada = None
+                continue
+
+            # --- PROCESAMIENTO DE CARÁTULA ---
+            if seccion_actual == "caratula":
+                if "UNIVERSIDAD NACIONAL JORGE BASADRE GROHMANN" in txt.upper() or txt.upper() == "INFORME DE LABORATORIO":
+                    continue
+
+                # Separar líneas internas si el párrafo usa saltos suaves (\n)
+                sublineas = [sl.strip() for sl in txt.split("\n") if sl.strip()]
+                for sl in sublineas:
+                    m_fac = re.match(r"^Facultad\s*:\s*(.+)$", sl, flags=re.IGNORECASE)
+                    if m_fac:
+                        c["facultad"] = m_fac.group(1).strip()
+                        en_autores = False
+                        continue
+
+                    m_esc = re.match(r"^Escuela(?:\s+Profesional)?\s*:\s*(.+)$", sl, flags=re.IGNORECASE)
+                    if m_esc:
+                        c["escuela"] = m_esc.group(1).strip()
+                        en_autores = False
+                        continue
+
+                    m_lab = re.match(r"^Laboratorio(?:\s+de)?\s*:\s*(.+)$", sl, flags=re.IGNORECASE)
+                    if m_lab:
+                        c["laboratorio"] = m_lab.group(1).strip()
+                        en_autores = False
+                        continue
+
+                    m_tit = re.match(r"^T[ií]tulo(?:\s+de\s+la\s+pr[aá]ctica)?\s*:\s*(.+)$", sl, flags=re.IGNORECASE)
+                    if m_tit:
+                        c["tituloPractica"] = m_tit.group(1).strip()
+                        en_autores = False
+                        continue
+
+                    if re.match(r"^(?:Autores|Autor|Integrantes|Estudiantes?)\s*:\s*(.*)$", sl, flags=re.IGNORECASE):
+                        resto_aut = re.sub(r"^(?:Autores|Autor|Integrantes|Estudiantes?)\s*:\s*", "", sl, flags=re.IGNORECASE).strip()
+                        en_autores = True
+                        if resto_aut:
+                            autores_detectados.append(limpiar_prefijo_lista(resto_aut))
+                        continue
+
+                    if re.search(r"\bGrupo\s*:", sl, flags=re.IGNORECASE) or re.search(r"\bHorario\s*:", sl, flags=re.IGNORECASE):
+                        en_autores = False
+                        m_g = re.search(r"Grupo\s*:\s*(.*?)(?=\s{2,}|Horario\s*:|$)", sl, flags=re.IGNORECASE)
+                        m_h = re.search(r"Horario\s*:\s*(.+)$", sl, flags=re.IGNORECASE)
+                        if m_g and m_g.group(1).strip():
+                            c["grupo"] = m_g.group(1).strip()
+                        if m_h and m_h.group(1).strip():
+                            c["horario"] = m_h.group(1).strip()
+                        continue
+
+                    m_doc = re.match(r"^(?:Docente|Profesor|Ingeniero)\s*:\s*(.+)$", sl, flags=re.IGNORECASE)
+                    if m_doc:
+                        c["docente"] = m_doc.group(1).strip()
+                        en_autores = False
+                        continue
+
+                    m_fej = re.match(r"^Fecha\s+de\s+(?:ejecuci[oó]n|realizaci[oó]n|pr[aá]ctica)\s*:\s*(.+)$", sl, flags=re.IGNORECASE)
+                    if m_fej:
+                        c["fechaEjecucion"] = m_fej.group(1).strip()
+                        en_autores = False
+                        continue
+
+                    m_fent = re.match(r"^Fecha\s+de\s+entrega\s*:\s*(.+)$", sl, flags=re.IGNORECASE)
+                    if m_fent:
+                        en_autores = False
+                        val_fe = m_fent.group(1).strip()
+                        m_tacna = re.search(r"(\d{1,2})\s+de\s+([a-zA-ZáéíóúÁÉÍÓÚ]+)\s+de\s+(\d{4})", val_fe, flags=re.IGNORECASE)
+                        m_slash = re.search(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", val_fe)
+                        if m_tacna:
+                            c["diaEntrega"] = m_tacna.group(1)
+                            c["mesEntrega"] = m_tacna.group(2)
+                            c["anioEntrega"] = m_tacna.group(3)
+                        elif m_slash:
+                            c["diaEntrega"] = m_slash.group(1)
+                            c["mesEntrega"] = m_slash.group(2)
+                            c["anioEntrega"] = m_slash.group(3)
+                        else:
+                            c["diaEntrega"] = val_fe
+                        continue
+
+                    if en_autores:
+                        aut_limpio = limpiar_prefijo_lista(sl)
+                        if aut_limpio:
+                            autores_detectados.append(aut_limpio)
+                continue
+
+            # --- PROCESAMIENTO DE SECCIONES DEL CUERPO ---
+            if seccion_actual == "introduccion":
+                m_og = re.match(r"^Objetivo\s+General\s*:\s*(.+)$", txt, flags=re.IGNORECASE)
+                if m_og:
+                    estado["objetivoGeneral"] = m_og.group(1).strip()
+                    en_objetivos_esp = False
+                    continue
+                if re.match(r"^Objetivos\s+Espec[ií]ficos\s*:?\s*$", txt, flags=re.IGNORECASE):
+                    en_objetivos_esp = True
+                    continue
+                if en_objetivos_esp:
+                    obj_l = limpiar_prefijo_lista(txt)
+                    if obj_l:
+                        objs_esp_detectados.append(obj_l)
+                else:
+                    parrafos_buffer["introduccion"].append(txt)
+
+            elif seccion_actual == "conclusiones":
+                m_err = re.match(r"^Fuentes\s+de\s+error(?:\s+y\s+aproximaciones)?\s*:\s*(.+)$", txt, flags=re.IGNORECASE)
+                if m_err:
+                    estado["fuentesError"] = m_err.group(1).strip()
+                else:
+                    concl_l = limpiar_prefijo_lista(txt)
+                    if concl_l:
+                        parrafos_buffer["conclusiones"].append(concl_l)
+
+            elif seccion_actual == "cuestionario":
+                m_preg = re.match(r"^(?:Pregunta\s*\d+|P\d+|\d+[\.\)])\s*[:\-\.]?\s*(.+)$", txt, flags=re.IGNORECASE)
+                if m_preg or txt.endswith("?"):
+                    if pregunta_actual is not None:
+                        cuestionario_detectado.append(pregunta_actual)
+                    enunciado = m_preg.group(1).strip() if m_preg else txt
+                    pregunta_actual = {"pregunta": enunciado, "respuesta": ""}
+                else:
+                    if pregunta_actual is None:
+                        pregunta_actual = {"pregunta": "Pregunta 1", "respuesta": txt}
+                    else:
+                        sep = "\n" if pregunta_actual["respuesta"] else ""
+                        pregunta_actual["respuesta"] += sep + txt
+
+            elif seccion_actual in parrafos_buffer:
+                parrafos_buffer[seccion_actual].append(txt)
+
+        elif tipo_bloque == "tbl":
+            if len(bloque.rows) == 0:
+                continue
+            headers_t = [cell.text.strip().replace("\n", " ") for cell in bloque.rows[0].cells]
+            rows_t = []
+            for r in bloque.rows[1:]:
+                fila = [cell.text.strip().replace("\n", " ") for cell in r.cells]
+                if any(cel != "" for cel in fila):
+                    rows_t.append(fila)
+
+            if not rows_t:
+                continue
+
+            tablas_detectadas_count += 1
+            titulo_t = pendiente_titulo_tabla if (pendiente_titulo_tabla and not pendiente_titulo_tabla.startswith("__")) else ""
+            pendiente_titulo_tabla = ""
+
+            if seccion_actual == "materiales":
+                mat_mapeados = _mapear_tabla_materiales(headers_t, rows_t)
+                if mat_mapeados:
+                    estado["materialesTabla"] = mat_mapeados
+                if titulo_t:
+                    estado["tituloTablaMateriales"] = titulo_t
+                ultima_entidad_insertada = "tabla_mat"
+
+            elif seccion_actual == "procedimiento":
+                estado["tablaCruda"] = {"headers": headers_t, "rows": rows_t}
+                if titulo_t:
+                    estado["tituloTablaCruda"] = titulo_t
+                ultima_entidad_insertada = "tabla_cruda"
+
+            else:
+                # Resultados o cualquier tabla principal del informe
+                estado["tablaResultados"] = {"headers": headers_t, "rows": rows_t}
+                if titulo_t:
+                    estado["tituloTablaResultados"] = titulo_t
+                ultima_entidad_insertada = "tabla_res"
+
+    if pregunta_actual is not None:
+        cuestionario_detectado.append(pregunta_actual)
+
+    if autores_detectados:
+        estado["autores"] = autores_detectados
+    if objs_esp_detectados:
+        estado["objetivosEspecificos"] = objs_esp_detectados
+    if cuestionario_detectado:
+        estado["cuestionario"] = cuestionario_detectado
+
+    estado["resumen"] = "\n\n".join(parrafos_buffer["resumen"])
+    estado["introduccionTeoria"] = "\n\n".join(parrafos_buffer["introduccion"])
+    estado["materialesTexto"] = "\n\n".join(parrafos_buffer["materiales"])
+    estado["procedimientoTexto"] = "\n\n".join(parrafos_buffer["procedimiento"])
+    estado["discusionTexto"] = "\n\n".join(parrafos_buffer["resultados"])
+    if parrafos_buffer["conclusiones"]:
+        estado["conclusiones"] = parrafos_buffer["conclusiones"]
+    estado["reflexionTexto"] = "\n\n".join(parrafos_buffer["reflexion"])
+    if parrafos_buffer["referencias"]:
+        estado["referencias"] = parrafos_buffer["referencias"]
+    estado["apendicesTexto"] = "\n\n".join(parrafos_buffer["apendices"])
+
+    # Calcular resumen de lo detectado para informar al usuario
+    secciones_detectadas = []
+    if c["tituloPractica"] or autores_detectados or c["facultad"]:
+        secciones_detectadas.append("Carátula")
+    if estado["resumen"]:
+        secciones_detectadas.append("1. Resumen")
+    if estado["introduccionTeoria"] or estado["objetivoGeneral"] or objs_esp_detectados:
+        secciones_detectadas.append("2. Introducción / Objetivos")
+    if estado["materialesTexto"] or any(m.get("nombre") for m in estado["materialesTabla"]):
+        secciones_detectadas.append("3.1 Materiales")
+    if estado["procedimientoTexto"] or any(any(cel for cel in r[1:]) for r in estado["tablaCruda"]["rows"]):
+        secciones_detectadas.append("3.2 Procedimiento")
+    if estado["discusionTexto"] or any(any(cel for cel in r[1:]) for r in estado["tablaResultados"]["rows"]):
+        secciones_detectadas.append("4. Resultados y Discusión")
+    if parrafos_buffer["conclusiones"]:
+        secciones_detectadas.append("5. Conclusiones")
+    if estado["reflexionTexto"]:
+        secciones_detectadas.append("6. Reflexión")
+    if parrafos_buffer["referencias"]:
+        secciones_detectadas.append("7. Referencias")
+    if cuestionario_detectado:
+        secciones_detectadas.append("8. Cuestionario")
+    if estado["apendicesTexto"]:
+        secciones_detectadas.append("9. Apéndices")
+
+    resumen_imp = {
+        "secciones": secciones_detectadas,
+        "tablas": tablas_detectadas_count,
+        "figuras": figuras_detectadas_count,
+    }
+    return estado, resumen_imp
+
+
+# ==============================================================================
+# BLOQUE 1C: GENERADOR INTELIGENTE DE APARTADOS IMPORTANTES FALTANTES
 # ==============================================================================
 
 def _extraer_contexto_practica(datos: dict) -> dict:
@@ -229,7 +698,6 @@ def _extraer_contexto_practica(datos: dict) -> dict:
         if str(m.get("nombre", "")).strip()
     ]
 
-    # Extraer resumen numérico si hay datos en el generador de gráficos o tabla de resultados
     hallazgo_numerico = ""
     gcfg = datos.get("graficoConfig", {})
     g_datos = gcfg.get("datos", [])
@@ -274,7 +742,6 @@ def _extraer_contexto_practica(datos: dict) -> dict:
 
 
 def generar_resumen_automatico(datos: dict) -> str:
-    """Redacta un Resumen académico APA 7 (tercera persona, tiempo pasado) cuando el usuario lo deja vacío."""
     ctx = _extraer_contexto_practica(datos)
     parte_obj = (
         f"con el objetivo de {ctx['obj_gen'][0].lower() + ctx['obj_gen'][1:].rstrip('.')}"
@@ -301,7 +768,6 @@ def generar_resumen_automatico(datos: dict) -> str:
 
 
 def generar_introduccion_automatica(datos: dict) -> tuple[str, str]:
-    """Genera borrador de Introducción y Objetivo General si ambos fueron dejados en blanco."""
     ctx = _extraer_contexto_practica(datos)
     teoria = (
         f"El estudio experimental de «{ctx['titulo']}» constituye un componente esencial en la formación "
@@ -321,7 +787,6 @@ def generar_introduccion_automatica(datos: dict) -> tuple[str, str]:
 
 
 def generar_discusion_automatica(datos: dict) -> str:
-    """Genera una Discusión de Resultados preliminar cuando no se ingresó texto en la sección 4."""
     ctx = _extraer_contexto_practica(datos)
     base_res = (
         ctx["hallazgo_numerico"]
@@ -337,7 +802,6 @@ def generar_discusion_automatica(datos: dict) -> str:
 
 
 def generar_conclusiones_automaticas(datos: dict) -> list[str]:
-    """Genera 3 conclusiones propias coherentes con la práctica, objetivos y datos disponibles."""
     ctx = _extraer_contexto_practica(datos)
     c1 = (
         f"Se cumplió satisfactoriamente con el desarrollo experimental de «{ctx['titulo']}» en el Laboratorio "
@@ -363,7 +827,6 @@ def generar_conclusiones_automaticas(datos: dict) -> list[str]:
 
 
 def generar_reflexion_automatica(datos: dict) -> str:
-    """Genera una Reflexión Argumentada vinculando la práctica con la carrera profesional."""
     ctx = _extraer_contexto_practica(datos)
     return (
         f"La ejecución de la práctica «{ctx['titulo']}» aporta competencias directamente transferibles al "
@@ -388,11 +851,7 @@ def generar_grafico_apa7_png(
     color_principal: str,
     mostrar_cuadricula: bool = True,
 ) -> tuple[bytes, str]:
-    """
-    Genera una imagen PNG (300 DPI) con estilo limpio APA 7 (sin título incrustado dentro
-    del lienzo, ya que APA 7 coloca el título arriba de la figura en el documento).
-    Devuelve (bytes_png, nota_estadistica_sugerida).
-    """
+    """Genera una imagen PNG (300 DPI) con estilo limpio APA 7."""
     if df_datos is None or df_datos.empty:
         raise ValueError("La tabla de datos del gráfico está vacía.")
 
@@ -621,7 +1080,6 @@ def _filtrar_tabla_valida(tabla_dict: dict) -> tuple[list, list]:
 
 
 def _configurar_idioma_espanol(doc):
-    """Configura el idioma predeterminado del documento Word en Español (es-PE)."""
     styles_element = doc.styles.element
     rPrDefault = styles_element.xpath("./w:docDefaults/w:rPrDefault/w:rPr")
     if rPrDefault:
@@ -630,7 +1088,6 @@ def _configurar_idioma_espanol(doc):
 
 
 def _agregar_numero_pagina_apa7(section):
-    """Agrega numeración de página en la esquina superior derecha (APA 7)."""
     header = section.header
     p = header.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -648,10 +1105,6 @@ def _agregar_numero_pagina_apa7(section):
 
 
 def _insertar_caja_advertencia_word(doc, texto_advertencia: str):
-    """
-    Inserta un recuadro de advertencia altamente visible (fondo ámbar claro, borde grueso
-    naranja oscuro y texto en negrita) al inicio de cualquier apartado autogenerado.
-    """
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
     p.paragraph_format.space_before = Pt(4)
@@ -686,7 +1139,6 @@ def _insertar_caja_advertencia_word(doc, texto_advertencia: str):
 
 
 def _aplicar_bordes_tabla_apa7(table):
-    """Aplica bordes estilo APA 7: solo líneas horizontales superior, bajo encabezado e inferior."""
     tblPr = table._tbl.tblPr
     borders = parse_xml(
         f'<w:tblBorders {nsdecls("w")}>'
@@ -711,7 +1163,6 @@ def _aplicar_bordes_tabla_apa7(table):
 
 
 def _insertar_tabla_apa7(doc, numero_tabla: int, titulo_cursiva: str, headers: list, rows: list, nota_pie: str):
-    """Inserta una tabla cumpliendo las reglas de APA 7.ª edición (con keep_with_next)."""
     p_num = doc.add_paragraph()
     p_num.paragraph_format.space_before = Pt(8)
     p_num.paragraph_format.space_after = Pt(0)
@@ -766,7 +1217,6 @@ def _insertar_tabla_apa7(doc, numero_tabla: int, titulo_cursiva: str, headers: l
 
 
 def _insertar_figura_apa7(doc, numero_figura: int, titulo_cursiva: str, img_b64: str, nota_pie: str, ancho_cm: float = 12.0):
-    """Inserta una Figura APA 7 solo si existe imagen válida, evitando títulos huérfanos."""
     if not img_b64 or not img_b64.strip():
         return False
     try:
@@ -811,7 +1261,6 @@ def _insertar_figura_apa7(doc, numero_figura: int, titulo_cursiva: str, img_b64:
 
 
 def obtener_estado_secciones_importantes(datos: dict) -> dict:
-    """Evalúa qué apartados importantes están vacíos y requieren autocompletado con advertencia."""
     resumen_vacio = not bool((datos.get("resumen") or "").strip())
     intro_vacia = not bool((datos.get("introduccionTeoria") or "").strip())
     t3_h, t3_r = _filtrar_tabla_valida(datos.get("tablaResultados", {}))
@@ -842,13 +1291,6 @@ def obtener_estado_secciones_importantes(datos: dict) -> dict:
 
 
 def generar_docx_bytes(datos: dict) -> bytes:
-    """
-    Genera el documento Word (.docx) oficial UNJBG en formato APA 7.ª edición:
-    - Si apartados importantes (Resumen, Introducción, Resultados/Discusión, Conclusiones, Reflexión)
-      no fueron llenados, los completa automáticamente con redacción académica contextualizada
-      colocando una advertencia visible al inicio.
-    - Los apartados y campos opcionales vacíos desaparecen del documento final.
-    """
     doc = Document()
     _configurar_idioma_espanol(doc)
 
@@ -868,7 +1310,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
 
     c = datos.get("caratula", {})
 
-    # --- CARÁTULA OFICIAL UNJBG (SOLO CAMPOS LLENADOS) ---
+    # --- CARÁTULA OFICIAL UNJBG ---
     p_uni = doc.add_paragraph()
     p_uni.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_uni.paragraph_format.line_spacing = 1.5
@@ -1011,7 +1453,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
                 if sangria:
                     p.paragraph_format.first_line_indent = Cm(1.27)
 
-    # 1. RESUMEN (Importante: si está vacío se autogenera con advertencia visible)
+    # 1. RESUMEN
     add_apa_h1("1. Resumen")
     resumen_val = (datos.get("resumen") or "").strip()
     if resumen_val:
@@ -1020,7 +1462,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
         _insertar_caja_advertencia_word(doc, ADVERTENCIA_SECCION_AUTO)
         add_apa_parrafos(generar_resumen_automatico(datos), sangria=False)
 
-    # 2. INTRODUCCIÓN Y OBJETIVOS (Importante: si está vacía se autogenera con advertencia visible)
+    # 2. INTRODUCCIÓN Y OBJETIVOS
     add_apa_h1("2. Introducción")
     intro_val = (datos.get("introduccionTeoria") or "").strip()
     obj_gen_val = (datos.get("objetivoGeneral") or "").strip()
@@ -1050,7 +1492,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
             for obj in objs_esp_validos:
                 doc.add_paragraph(obj, style="List Bullet")
 
-    # 3. MATERIALES Y DESARROLLO EXPERIMENTAL (solo muestra subsecciones con contenido)
+    # 3. MATERIALES Y DESARROLLO EXPERIMENTAL
     mat_texto_val = (datos.get("materialesTexto") or "").strip()
     mat_filas_raw = [
         m for m in datos.get("materialesTabla", [])
@@ -1124,7 +1566,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
                     nota_pie=datos.get("notaTablaCruda", ""),
                 )
 
-    # 4. RESULTADOS Y DISCUSIÓN (Importante: si está completamente vacío, se autogenera con advertencia)
+    # 4. RESULTADOS Y DISCUSIÓN
     t3_headers, t3_rows = _filtrar_tabla_valida(datos.get("tablaResultados", {}))
     fig2_img_val = (datos.get("figura2Img") or "").strip()
     disc_texto_val = (datos.get("discusionTexto") or "").strip()
@@ -1158,7 +1600,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
         _insertar_caja_advertencia_word(doc, ADVERTENCIA_SECCION_AUTO)
         add_apa_parrafos(generar_discusion_automatica(datos), sangria=True)
 
-    # 5. CONCLUSIONES (Importante: si está vacío se autogenera con advertencia visible)
+    # 5. CONCLUSIONES
     conclusiones_validas = [limpiar_prefijo_lista(x) for x in datos.get("conclusiones", []) if limpiar_prefijo_lista(x)]
     fuentes_error_val = limpiar_prefijo_lista(datos.get("fuentesError", ""))
 
@@ -1177,7 +1619,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
         p_err.add_run("Fuentes de error y aproximaciones: ").bold = True
         p_err.add_run(fuentes_error_val)
 
-    # 6. REFLEXIÓN ARGUMENTADA (Importante: si está vacía se autogenera con advertencia visible)
+    # 6. REFLEXIÓN ARGUMENTADA
     add_apa_h1("6. Reflexión Argumentada")
     reflexion_val = (datos.get("reflexionTexto") or "").strip()
     if reflexion_val:
@@ -1186,7 +1628,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
         _insertar_caja_advertencia_word(doc, ADVERTENCIA_SECCION_AUTO)
         add_apa_parrafos(generar_reflexion_automatica(datos), sangria=True)
 
-    # 7. REFERENCIAS (se omite si no hay referencias para no fabricar citas falsas)
+    # 7. REFERENCIAS
     refs_validas = [limpiar_texto_placeholder(r) for r in datos.get("referencias", []) if limpiar_texto_placeholder(r)]
     if refs_validas:
         add_apa_h1("7. Referencias")
@@ -1196,7 +1638,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
             p_ref.paragraph_format.left_indent = Cm(1.27)
             p_ref.paragraph_format.first_line_indent = Cm(-1.27)
 
-    # 8. CUESTIONARIO (sección opcional: desaparece si no hay preguntas o respuestas)
+    # 8. CUESTIONARIO (Opcional)
     cuest_valido = [
         q for q in datos.get("cuestionario", [])
         if (q.get("pregunta") or "").strip() or (q.get("respuesta") or "").strip()
@@ -1214,7 +1656,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
             if resp:
                 add_apa_parrafos(resp, sangria=True)
 
-    # 9. APÉNDICES (sección opcional: desaparece si está vacía)
+    # 9. APÉNDICES (Opcional)
     apendices_val = (datos.get("apendicesTexto") or "").strip()
     if apendices_val:
         add_apa_h1("9. Apéndices")
@@ -1227,7 +1669,6 @@ def generar_docx_bytes(datos: dict) -> bytes:
 
 
 def generar_markdown_str(datos: dict) -> str:
-    """Genera el informe en Markdown con autocompletado y advertencia en apartados importantes vacíos."""
     c = datos.get("caratula", {})
     lineas = ['<div align="center">', "", "# UNIVERSIDAD NACIONAL JORGE BASADRE GROHMANN", ""]
 
@@ -1296,7 +1737,6 @@ def generar_markdown_str(datos: dict) -> str:
 
 
 def generar_latex_str(datos: dict) -> str:
-    """Genera el código fuente LaTeX (.tex) con advertencia en apartados importantes autogenerados."""
     c = datos.get("caratula", {})
     autores = [limpiar_texto_placeholder(a) for a in datos.get("autores", []) if limpiar_texto_placeholder(a)]
     autores_tex = "\n".join([f"  \\item {a}" for a in autores])
@@ -1406,7 +1846,7 @@ def generar_json_str(datos: dict) -> str:
 
 
 # ==============================================================================
-# BLOQUE 4: ESTADO INICIAL LIMPIO Y EJEMPLO ACADÉMICO PRECARGADO
+# BLOQUE 4: ESTADO INICIAL LIMPIO, SINCRONIZACIÓN DE TABLAS Y EJEMPLO
 # ==============================================================================
 
 def obtener_estado_inicial() -> dict:
@@ -1477,6 +1917,19 @@ def obtener_estado_inicial() -> dict:
             ],
         },
     }
+
+
+def _sincronizar_dataframes_sesion(datos: dict):
+    """Reconstruye los DataFrames base de las tablas solo cuando se carga/importa/limpia el proyecto."""
+    st.session_state["df_mat_base"] = pd.DataFrame(datos["materialesTabla"])
+    st.session_state["df_cruda_base"] = pd.DataFrame(
+        datos["tablaCruda"]["rows"], columns=datos["tablaCruda"]["headers"]
+    )
+    st.session_state["df_res_base"] = pd.DataFrame(
+        datos["tablaResultados"]["rows"], columns=datos["tablaResultados"]["headers"]
+    )
+    st.session_state["df_graf_base"] = pd.DataFrame(datos["graficoConfig"]["datos"])
+    st.session_state["tabla_version_uid"] = st.session_state.get("tabla_version_uid", 0) + 1
 
 
 def cargar_ejemplo() -> dict:
@@ -1608,11 +2061,15 @@ def main():
 
     if "informe" not in st.session_state:
         st.session_state["informe"] = obtener_estado_inicial()
+        _sincronizar_dataframes_sesion(st.session_state["informe"])
 
     datos = st.session_state["informe"]
     if "graficoConfig" not in datos:
         datos["graficoConfig"] = obtener_estado_inicial()["graficoConfig"]
+    if "df_mat_base" not in st.session_state:
+        _sincronizar_dataframes_sesion(datos)
 
+    uid_tablas = st.session_state.get("tabla_version_uid", 1)
     logo_bytes = obtener_logo_bytes()
 
     # --- BARRA LATERAL ---
@@ -1628,17 +2085,40 @@ def main():
         mostrar_guias = st.toggle("Mostrar guías académicas APA 7", value=True)
 
         st.divider()
+        st.markdown("#### Importar desde Word (.docx)")
+        st.caption("Sube tu borrador o avance en Word para rellenar todos los apartados automáticamente.")
+        archivo_docx_subido = st.file_uploader(
+            "Seleccionar archivo Word (.docx)",
+            type=["docx"],
+            key="uploader_docx_sidebar",
+        )
+        if archivo_docx_subido is not None:
+            if st.button("Detectar y Rellenar Apartados", type="primary", use_container_width=True):
+                try:
+                    nuevo_estado, info_imp = importar_desde_docx(archivo_docx_subido.getvalue())
+                    st.session_state["informe"] = nuevo_estado
+                    _sincronizar_dataframes_sesion(nuevo_estado)
+                    st.session_state["msg_importacion_docx"] = info_imp
+                    st.rerun()
+                except Exception as err_imp:
+                    st.error(f"No se pudo procesar el archivo Word: {err_imp}")
+
+        st.divider()
         st.markdown("#### Acciones Rápidas")
         if st.button("Cargar Ejemplo Completo", use_container_width=True):
-            st.session_state["informe"] = cargar_ejemplo()
+            ej = cargar_ejemplo()
+            st.session_state["informe"] = ej
+            _sincronizar_dataframes_sesion(ej)
             st.rerun()
 
         if st.button("Limpiar Todo el Formulario", use_container_width=True):
-            st.session_state["informe"] = obtener_estado_inicial()
+            limpio = obtener_estado_inicial()
+            st.session_state["informe"] = limpio
+            _sincronizar_dataframes_sesion(limpio)
             st.rerun()
 
         st.divider()
-        st.markdown("#### Guardar o Actualizar Proyecto")
+        st.markdown("#### Guardar o Actualizar Proyecto (.json)")
         json_str = generar_json_str(datos)
         st.download_button(
             label="Guardar Proyecto (.json)",
@@ -1656,6 +2136,7 @@ def main():
                     base = obtener_estado_inicial()
                     base.update(cargado)
                     st.session_state["informe"] = base
+                    _sincronizar_dataframes_sesion(base)
                     st.success("Proyecto cargado correctamente.")
                     st.rerun()
                 except Exception as e:
@@ -1679,6 +2160,36 @@ def main():
         "Formato oficial de la **Universidad Nacional Jorge Basadre Grohmann** "
         "adaptado a **APA 7.ª Edición**."
     )
+
+    if "msg_importacion_docx" in st.session_state:
+        info_m = st.session_state.pop("msg_importacion_docx")
+        secs_txt = ", ".join(info_m["secciones"]) if info_m["secciones"] else "datos generales"
+        st.success(
+            f"**Documento Word importado correctamente.** Se detectaron y rellenaron: **{secs_txt}** "
+            f"({info_m['tablas']} tabla(s) y {info_m['figuras']} figura(s)). Revisa cada pestaña y descarga tu versión APA 7."
+        )
+
+    # Panel rápido en la parte superior para importar Word también desde el área principal
+    with st.expander("Importar un archivo Word (.docx) existente para rellenar los apartados automáticamente", expanded=False):
+        col_up1, col_up2 = st.columns([3, 1])
+        with col_up1:
+            up_docx_main = st.file_uploader(
+                "Sube aquí tu archivo .docx (borrador, guía resuelta o informe previo):",
+                type=["docx"],
+                key="uploader_docx_main",
+            )
+        with col_up2:
+            st.write("")
+            st.write("")
+            if st.button("Cargar Datos del Word", type="primary", use_container_width=True, disabled=(up_docx_main is None)):
+                try:
+                    nuevo_estado, info_imp = importar_desde_docx(up_docx_main.getvalue())
+                    st.session_state["informe"] = nuevo_estado
+                    _sincronizar_dataframes_sesion(nuevo_estado)
+                    st.session_state["msg_importacion_docx"] = info_imp
+                    st.rerun()
+                except Exception as err_imp:
+                    st.error(f"Error al leer el archivo .docx: {err_imp}")
 
     estado_imp = obtener_estado_secciones_importantes(datos)
     if estado_imp["secciones_auto"]:
@@ -1947,12 +2458,11 @@ def main():
             height=100,
         )
 
-        st.markdown("**Tabla de Equipos / Materiales** *(Si la dejas vacía, desaparecerá del Word final)*")
+        st.markdown("**Tabla de Equipos / Materiales** *(Presiona Enter o Tab tras escribir en una celda)*")
         datos["tituloTablaMateriales"] = st.text_input("Título en cursiva de la tabla de materiales:", value=datos["tituloTablaMateriales"])
 
-        df_mat = pd.DataFrame(datos["materialesTabla"])
         df_mat_edit = st.data_editor(
-            df_mat,
+            st.session_state["df_mat_base"],
             num_rows="dynamic",
             use_container_width=True,
             column_config={
@@ -1962,7 +2472,7 @@ def main():
                 "apreciacion": "Apreciación / Incerteza",
                 "cantidad": "Cantidad",
             },
-            key="editor_materiales",
+            key=f"editor_materiales_{uid_tablas}",
         )
         datos["materialesTabla"] = df_mat_edit.fillna("").to_dict(orient="records")
         datos["notaTablaMateriales"] = st.text_input(
@@ -2014,10 +2524,18 @@ def main():
                 datos["tablaCruda"]["headers"].append(nueva_col_cruda.strip())
                 for r in datos["tablaCruda"]["rows"]:
                     r.append("")
+                st.session_state["df_cruda_base"] = pd.DataFrame(
+                    datos["tablaCruda"]["rows"], columns=datos["tablaCruda"]["headers"]
+                )
+                st.session_state["tabla_version_uid"] = uid_tablas + 1
                 st.rerun()
 
-        df_cruda = pd.DataFrame(datos["tablaCruda"]["rows"], columns=datos["tablaCruda"]["headers"])
-        df_cruda_edit = st.data_editor(df_cruda, num_rows="dynamic", use_container_width=True, key="editor_cruda")
+        df_cruda_edit = st.data_editor(
+            st.session_state["df_cruda_base"],
+            num_rows="dynamic",
+            use_container_width=True,
+            key=f"editor_cruda_{uid_tablas}",
+        )
         datos["tablaCruda"]["headers"] = list(df_cruda_edit.columns)
         datos["tablaCruda"]["rows"] = df_cruda_edit.fillna("").values.tolist()
         datos["notaTablaCruda"] = st.text_input(
@@ -2046,10 +2564,18 @@ def main():
                 datos["tablaResultados"]["headers"].append(nueva_col_res.strip())
                 for r in datos["tablaResultados"]["rows"]:
                     r.append("")
+                st.session_state["df_res_base"] = pd.DataFrame(
+                    datos["tablaResultados"]["rows"], columns=datos["tablaResultados"]["headers"]
+                )
+                st.session_state["tabla_version_uid"] = uid_tablas + 1
                 st.rerun()
 
-        df_res = pd.DataFrame(datos["tablaResultados"]["rows"], columns=datos["tablaResultados"]["headers"])
-        df_res_edit = st.data_editor(df_res, num_rows="dynamic", use_container_width=True, key="editor_res")
+        df_res_edit = st.data_editor(
+            st.session_state["df_res_base"],
+            num_rows="dynamic",
+            use_container_width=True,
+            key=f"editor_res_{uid_tablas}",
+        )
         datos["tablaResultados"]["headers"] = list(df_res_edit.columns)
         datos["tablaResultados"]["rows"] = df_res_edit.fillna("").values.tolist()
         datos["notaTablaResultados"] = st.text_input(
@@ -2100,9 +2626,8 @@ def main():
         with cg6:
             gcfg["serie_2"] = st.text_input("Nombre Serie 2 (opcional):", value=gcfg.get("serie_2", ""), placeholder="Ej. Grupo control (opcional)")
 
-        df_graf_init = pd.DataFrame(gcfg.get("datos", []))
         df_graf_edit = st.data_editor(
-            df_graf_init,
+            st.session_state["df_graf_base"],
             num_rows="dynamic",
             use_container_width=True,
             column_config={
@@ -2110,7 +2635,7 @@ def main():
                 "Serie 1": "Serie 1 (Valor Y1)",
                 "Serie 2": "Serie 2 (Valor Y2 - opcional)",
             },
-            key="editor_grafico_datos",
+            key=f"editor_grafico_datos_{uid_tablas}",
         )
         gcfg["datos"] = df_graf_edit.to_dict(orient="records")
 
