@@ -2,23 +2,9 @@
 
 Aplicación web interactiva desarrollada en **Python y Streamlit** para elaborar y exportar informes de **Laboratorio de Física** de la **Universidad Nacional Jorge Basadre Grohmann (Tacna, Perú)** cumpliendo las normas **APA 7.ª Edición**.
 
----
+## Novedades de esta Versión
 
-## Características Principales
-
-- **100 % Autocontenido para GitHub y Streamlit Cloud:** `streamlit_app.py` integra el escudo institucional UNJBG tanto en carpeta (`assets/logo-unjbg.png`) como embebido en código, garantizando que funcione sin errores incluso si subes los archivos desde la interfaz web de GitHub.
-- **Carátula Oficial UNJBG:** Escudo institucional centrado inmediatamente después de **Escuela Profesional** y antes de **Laboratorio de: FÍSICA**.
-- **Normativa APA 7.ª Edición Completa:**
-  - Exportación directa a **Word (`.docx`)** con fuente *Times New Roman* 12 pt, interlineado doble (`2.0`), márgenes de `2.54 cm`, numeración superior derecha, tablas únicamente con bordes horizontales, figuras con título en cursiva y *Nota.* al pie, y referencias ordenadas alfabéticamente con **sangría francesa** (`1.27 cm`).
-  - Exportación también disponible en **LaTeX (`.tex`)**, **Markdown (`.md`)** y respaldo editable **JSON (`.json`)**.
-- **Calculadora Integrada de Regresión Lineal:** Ajuste por mínimos cuadrados ($y = mx + b$) con cálculo automático de pendiente, intercepto, incertezas estándar y coeficiente $R^2$.
-
----
-
-## Cómo Subirlo a un Repositorio Nuevo en GitHub y Compartirlo en Streamlit
-
-1. Crea un **repositorio nuevo** (público) en [github.com/new](https://github.com/new).
-2. Descomprime este archivo `.zip` y sube los archivos directamente a la **raíz** del repositorio (`streamlit_app.py`, `requirements.txt`, `assets/`, `.streamlit/`, `README.md`).
-3. Ingresa a [share.streamlit.io](https://share.streamlit.io/), inicia sesión con tu cuenta de GitHub y haz clic en **Create app** -> **Deploy a public app from GitHub**.
-4. Selecciona tu nuevo repositorio, deja la rama `main` y verifica que **Main file path** sea `streamlit_app.py`.
-5. Haz clic en **Deploy** y obtendrás tu enlace público listo para compartir.
+- **Limpieza Inteligente del Word Final (`.docx`):** Todo campo, tabla sin datos, figura sin imagen, opción marcada como *(opcional)* o sección completa que no sea llenada desaparece automáticamente del documento Word exportado.
+- **Generador Integrado de Gráficos APA 7 (300 DPI):** Crea gráficos de dispersión con ajuste lineal por mínimos cuadrados ($y = mx + b$, $R^2$), líneas comparativas o barras, e insértalos directamente en el informe con un clic.
+- **Numeración Correlativa Automática:** Las tablas (`Tabla 1`, `Tabla 2`...) y figuras (`Figura 1`, `Figura 2`...) se numeran automáticamente según las que realmente contengan información, sin saltos ni títulos huérfanos.
+- **Prevención de Doble Numeración:** Limpia prefijos escritos manualmente (`1.`, `2.`, `-`) en listas de objetivos y conclusiones antes de aplicar la numeración nativa de Word.
