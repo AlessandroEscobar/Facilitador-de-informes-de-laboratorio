@@ -2,9 +2,8 @@
 
 Aplicación web interactiva desarrollada en **Python y Streamlit** para elaborar y exportar informes de **Laboratorio de Física** de la **Universidad Nacional Jorge Basadre Grohmann (Tacna, Perú)** cumpliendo las normas **APA 7.ª Edición**.
 
-## Novedades de esta Versión
+## Funcionalidades Principales
 
-- **Limpieza Inteligente del Word Final (`.docx`):** Todo campo, tabla sin datos, figura sin imagen, opción marcada como *(opcional)* o sección completa que no sea llenada desaparece automáticamente del documento Word exportado.
-- **Generador Integrado de Gráficos APA 7 (300 DPI):** Crea gráficos de dispersión con ajuste lineal por mínimos cuadrados ($y = mx + b$, $R^2$), líneas comparativas o barras, e insértalos directamente en el informe con un clic.
-- **Numeración Correlativa Automática:** Las tablas (`Tabla 1`, `Tabla 2`...) y figuras (`Figura 1`, `Figura 2`...) se numeran automáticamente según las que realmente contengan información, sin saltos ni títulos huérfanos.
-- **Prevención de Doble Numeración:** Limpia prefijos escritos manualmente (`1.`, `2.`, `-`) en listas de objetivos y conclusiones antes de aplicar la numeración nativa de Word.
+- **Autocompletado Inteligente con Advertencia Visible:** Si apartados importantes como **1. Resumen**, **2. Introducción**, **4. Resultados y Discusión**, **5. Conclusiones** o **6. Reflexión Argumentada** se dejan en blanco, el sistema redacta automáticamente un borrador académico contextualizado al título de la práctica, laboratorio, escuela profesional y datos ingresados, colocando un recuadro de advertencia visible al inicio.
+- **Omisión de Apartados Opcionales Vacíos:** Cuestionario (Opcional), Apéndices (Opcional), Fuentes de error (opcional), tablas sin datos y figuras sin imagen desaparecen automáticamente en el archivo Word final.
+- **Generador Integrado de Gráficos APA 7 (300 DPI):** Crea gráficos de dispersión con ajuste lineal por mínimos cuadrados ($y = mx + b$, $R^2$), líneas comparativas o barras, e insértalos directamente en el informe.

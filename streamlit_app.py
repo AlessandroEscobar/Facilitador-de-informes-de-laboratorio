@@ -3,19 +3,21 @@ GENERADOR DE INFORMES DE LABORATORIO - UNJBG (APA 7.ª EDICIÓN)
 Aplicación web interactiva desarrollada en Python + Streamlit para la
 Universidad Nacional Jorge Basadre Grohmann (Tacna, Perú).
 
-Mejoras incluidas en esta versión:
-1. Limpieza inteligente al exportar a Word (.docx):
-   - Todo campo, opción marcada como "(opcional)", tabla sin datos, figura sin imagen
-     o sección completa que no se llene desaparece automáticamente del archivo Word final.
-   - Sin textos de relleno ni corchetes ([ ], [Grado y Nombre], etc.) en el resultado final.
-   - Numeración correlativa automática de Tablas (Tabla 1, Tabla 2...) y Figuras (Figura 1, Figura 2...)
-     según las que realmente contengan datos o imágenes.
-   - Eliminación automática de doble numeración en listas (ej. "1. 1." -> "1.").
-   - Idioma del documento Word configurado en Español (es-PE) y saltos de página protegidos
-     (keep_with_next) para evitar títulos de tablas o figuras huérfanos.
-2. Generador integrado de gráficos científicos APA 7 (300 DPI):
+Funcionalidades clave:
+1. Autocompletado inteligente con advertencia visible en apartados importantes vacíos:
+   - Si apartados fundamentales como 1. Resumen, 2. Introducción, 4. Resultados y Discusión,
+     5. Conclusiones o 6. Reflexión Argumentada se dejan sin llenar, el sistema redacta
+     automáticamente una propuesta académica contextualizada a partir del título de la práctica,
+     laboratorio, escuela profesional, objetivos y datos/gráficos ingresados, colocando una
+     ADVERTENCIA VISIBLE al inicio del apartado (y un aviso resumen al inicio del cuerpo) para
+     que el estudiante lo revise y valide antes de su entrega.
+2. Omisión limpia de apartados y campos opcionales vacíos:
+   - Cuestionario (Opcional), Apéndices (Opcional), Fuentes de error (opcional), campos opcionales
+     de carátula, tablas sin datos y figuras sin imagen desaparecen del Word final sin dejar
+     espacios vacíos ni títulos huérfanos.
+3. Generador integrado de gráficos científicos APA 7 (300 DPI):
    - Dispersión + Ajuste Lineal por Mínimos Cuadrados (y = mx + b, R²), Líneas Comparativas
-     y Barras con barras de error, listo para insertarse directamente en el Word.
+     y Barras Comparativas.
 """
 
 import io
@@ -30,7 +32,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import streamlit as st
 from docx import Document
-from docx.shared import Pt, Cm
+from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
@@ -89,25 +91,20 @@ GUIAS_SECCIONES = {
     "resumen": (
         "Redactado en tercera persona, tiempo pasado, vocabulario formal y con una extensión "
         "aproximada de 15 líneas (en APA 7: párrafo único sin sangría inicial, interlineado doble). "
-        "Comprende una visión integral: breve fundamentación teórica, metodología empleada, "
-        "resultados más relevantes con valores numéricos y su incerteza, y conclusiones principales. "
-        "Si se deja vacío, esta sección no aparecerá en el Word final."
+        "Si lo dejas vacío, el sistema redactará un resumen preliminar con una advertencia visible al inicio."
     ),
     "introduccion": (
-        "Exposición de las motivaciones del trabajo experimental. Incluye la base teórica mínima "
-        "para comprender el fenómeno estudiado, ecuaciones numeradas correlativamente (1), (2)... y "
-        "citas bibliográficas en formato APA 7.ª edición (Autor, Año). Al final se indican los "
-        "objetivos de la práctica. Si no llenas alguna parte, se omitirá en el Word final."
+        "Exposición de las motivaciones del trabajo experimental, base teórica mínima, ecuaciones "
+        "numeradas (1), (2)... y citas bibliográficas APA 7 (Autor, Año). Al final se indican los "
+        "objetivos. Si se deja en blanco, se generará un borrador introductorio con advertencia visible."
     ),
     "materiales": (
         "Descripción de dispositivos, reactivos y equipos de medición, indicando marca, rango de "
-        "medición y apreciación. En APA 7, la tabla lleva el número en negrita arriba, título en "
-        "cursiva debajo y únicamente bordes horizontales. Si dejas la tabla vacía, no saldrá en el Word."
+        "medición y apreciación. Si dejas la tabla vacía, no saldrá en el Word."
     ),
     "procedimiento": (
         "Descripción del método de medición en tiempo pasado. Puedes incluir un esquema del "
-        "dispositivo experimental (Figura) y una tabla de datos experimentales directos. "
-        "Todo elemento que dejes vacío desaparecerá en el archivo Word final."
+        "dispositivo experimental (Figura) y una tabla de datos experimentales directos."
     ),
     "resultados": (
         "Presentación de resultados procesados en tablas y gráficos bajo normativa APA 7.ª edición. "
@@ -116,12 +113,12 @@ GUIAS_SECCIONES = {
     ),
     "conclusiones": (
         "Argumentación de cómo los resultados obtenidos demuestran los objetivos planteados. "
-        "No necesitas escribir '1.', '2.' al inicio de cada conclusión, porque Word las numera "
-        "automáticamente. El campo de fuentes de error es opcional y solo sale si lo completas."
+        "Si no llenas las conclusiones, el sistema generará conclusiones propias basadas en tu práctica "
+        "con una advertencia visible al inicio. El apartado de fuentes de error es opcional."
     ),
     "reflexion": (
         "Comentario fundamentado que relaciona la teoría evaluada experimentalmente con el campo "
-        "de acción profesional de la carrera. Si se deja vacío, esta sección desaparece en el Word."
+        "de acción profesional de la carrera. Si se deja vacío, se autogenerará con advertencia visible."
     ),
     "referencias": (
         "Relación ordenada alfabéticamente de la bibliografía citada en el informe, bajo formato "
@@ -137,6 +134,11 @@ GUIAS_SECCIONES = {
         "anexos fotográficos). Si se deja vacío, desaparecerá del archivo Word final."
     ),
 }
+
+ADVERTENCIA_SECCION_AUTO = (
+    "ADVERTENCIA: Este apartado fue generado automáticamente por el sistema porque se dejó en blanco. "
+    "Revise, ajuste y valide su contenido con sus mediciones experimentales reales antes de presentar el informe."
+)
 
 
 def obtener_logo_bytes() -> bytes:
@@ -207,6 +209,172 @@ def calcular_regresion_lineal(x_vals: list, y_vals: list) -> dict:
 
 
 # ==============================================================================
+# BLOQUE 1B: GENERADOR INTELIGENTE DE APARTADOS IMPORTANTES FALTANTES
+# ==============================================================================
+
+def _extraer_contexto_practica(datos: dict) -> dict:
+    """Extrae metadatos, objetivos, materiales y hallazgos disponibles para redactar borradores coherentes."""
+    c = datos.get("caratula", {})
+    titulo = limpiar_texto_placeholder(c.get("tituloPractica", "")) or "la práctica experimental desarrollada"
+    lab = limpiar_texto_placeholder(c.get("laboratorio", "")) or "Física"
+    escuela = limpiar_texto_placeholder(c.get("escuela", "")) or "ingeniería y ciencias aplicadas"
+    facultad = limpiar_texto_placeholder(c.get("facultad", "")) or "la Universidad Nacional Jorge Basadre Grohmann"
+
+    obj_gen = (datos.get("objetivoGeneral") or "").strip()
+    objs_esp = [limpiar_prefijo_lista(o) for o in datos.get("objetivosEspecificos", []) if limpiar_prefijo_lista(o)]
+
+    materiales_nombres = [
+        str(m.get("nombre", "")).strip()
+        for m in datos.get("materialesTabla", [])
+        if str(m.get("nombre", "")).strip()
+    ]
+
+    # Extraer resumen numérico si hay datos en el generador de gráficos o tabla de resultados
+    hallazgo_numerico = ""
+    gcfg = datos.get("graficoConfig", {})
+    g_datos = gcfg.get("datos", [])
+    if g_datos and datos.get("figura2Img"):
+        try:
+            xs = [float(r["X"]) for r in g_datos if r.get("X") is not None and r.get("Serie 1") is not None and str(r["X"]).strip() != "" and str(r["Serie 1"]).strip() != ""]
+            ys = [float(r["Serie 1"]) for r in g_datos if r.get("X") is not None and r.get("Serie 1") is not None and str(r["X"]).strip() != "" and str(r["Serie 1"]).strip() != ""]
+            if len(xs) >= 3 and gcfg.get("tipo", "").startswith("Dispersión"):
+                reg = calcular_regresion_lineal(xs, ys)
+                eje_x = gcfg.get("eje_x") or "la variable independiente"
+                eje_y = gcfg.get("eje_y") or "la variable dependiente"
+                hallazgo_numerico = (
+                    f"Mediante el análisis de regresión lineal por mínimos cuadrados entre {eje_y} y {eje_x}, "
+                    f"se obtuvo una pendiente experimental de ({reg['m']:.4g} ± {reg['dm']:.4g}) con un "
+                    f"coeficiente de determinación R² = {reg['r2']:.4f}."
+                )
+        except Exception:
+            pass
+
+    if not hallazgo_numerico:
+        t_res = datos.get("tablaResultados", {})
+        filas_res = [
+            r for r in t_res.get("rows", [])
+            if any(str(cel).strip() for cel in (r[1:] if len(r) > 1 else r))
+        ]
+        if filas_res:
+            hallazgo_numerico = (
+                f"Los valores experimentales procesados en la tabla de resultados ({len(filas_res)} ensayos evaluados) "
+                "evidencian concordancia con el comportamiento previsto por el modelo teórico de referencia."
+            )
+
+    return {
+        "titulo": titulo,
+        "lab": lab,
+        "escuela": escuela,
+        "facultad": facultad,
+        "obj_gen": obj_gen,
+        "objs_esp": objs_esp,
+        "materiales": materiales_nombres,
+        "hallazgo_numerico": hallazgo_numerico,
+    }
+
+
+def generar_resumen_automatico(datos: dict) -> str:
+    """Redacta un Resumen académico APA 7 (tercera persona, tiempo pasado) cuando el usuario lo deja vacío."""
+    ctx = _extraer_contexto_practica(datos)
+    parte_obj = (
+        f"con el objetivo de {ctx['obj_gen'][0].lower() + ctx['obj_gen'][1:].rstrip('.')}"
+        if ctx["obj_gen"]
+        else f"con el propósito de evaluar experimentalmente los parámetros físicos asociados a {ctx['titulo']}"
+    )
+    parte_mat = (
+        f"Para la toma de datos se emplearon instrumentos y materiales calibrados como {', '.join(ctx['materiales'][:4])}, "
+        "siguiendo el protocolo experimental establecido en la guía de práctica."
+        if ctx["materiales"]
+        else "Para la ejecución experimental se aplicó un procedimiento sistemático de medición directa e indirecta controlando las condiciones del ensayo."
+    )
+    parte_res = (
+        ctx["hallazgo_numerico"]
+        if ctx["hallazgo_numerico"]
+        else "Los resultados obtenidos permitieron cuantificar las magnitudes estudiadas y contrastarlas frente a los valores teóricos esperados, identificando las principales fuentes de incerteza experimental."
+    )
+    return (
+        f"Se desarrolló la práctica experimental titulada «{ctx['titulo']}» en el Laboratorio de {ctx['lab']} "
+        f"de la Universidad Nacional Jorge Basadre Grohmann, {parte_obj}. {parte_mat} {parte_res} "
+        "Finalmente, se comprobó la validez del fundamento teórico analizado y se establecieron criterios "
+        "técnicos para reducir los errores sistemáticos y aleatorios en futuras mediciones."
+    )
+
+
+def generar_introduccion_automatica(datos: dict) -> tuple[str, str]:
+    """Genera borrador de Introducción y Objetivo General si ambos fueron dejados en blanco."""
+    ctx = _extraer_contexto_practica(datos)
+    teoria = (
+        f"El estudio experimental de «{ctx['titulo']}» constituye un componente esencial en la formación "
+        f"científica y técnica de los estudiantes de {ctx['escuela']} en {ctx['facultad']}. "
+        "La experimentación en laboratorio permite contrastar los modelos teóricos con observaciones "
+        "cuantitativas reales, fortaleciendo la capacidad de análisis crítico, el manejo de instrumentos "
+        "de precisión y la estimación rigurosa de incertezas.\n\n"
+        "En el marco de esta experiencia se analizaron las variables físicas fundamentales que gobiernan el "
+        "fenómeno estudiado, estableciendo relaciones funcionales entre las magnitudes medidas directamente y "
+        "los parámetros derivados mediante procesamiento matemático y gráfico."
+    )
+    obj_gen = ctx["obj_gen"] or (
+        f"Evaluar experimentalmente los principios y parámetros fundamentales asociados a «{ctx['titulo']}» "
+        f"en el Laboratorio de {ctx['lab']}, contrastando los resultados obtenidos con el modelo teórico."
+    )
+    return teoria, obj_gen
+
+
+def generar_discusion_automatica(datos: dict) -> str:
+    """Genera una Discusión de Resultados preliminar cuando no se ingresó texto en la sección 4."""
+    ctx = _extraer_contexto_practica(datos)
+    base_res = (
+        ctx["hallazgo_numerico"]
+        if ctx["hallazgo_numerico"]
+        else "A partir de las observaciones y registros efectuados durante la práctica, se verificó la tendencia esperada entre las variables experimentales."
+    )
+    return (
+        f"{base_res} Las ligeras discrepancias observadas respecto al comportamiento teórico ideal se atribuyen "
+        "principalmente a la apreciación finita de los instrumentos de medición, las variaciones ambientales "
+        "durante el ensayo y el error de lectura del operador, factores que se mantienen dentro de los márgenes "
+        "aceptables para una práctica de laboratorio universitario."
+    )
+
+
+def generar_conclusiones_automaticas(datos: dict) -> list[str]:
+    """Genera 3 conclusiones propias coherentes con la práctica, objetivos y datos disponibles."""
+    ctx = _extraer_contexto_practica(datos)
+    c1 = (
+        f"Se cumplió satisfactoriamente con el desarrollo experimental de «{ctx['titulo']}» en el Laboratorio "
+        f"de {ctx['lab']}, verificando de manera cuantitativa la relación entre las variables físicas evaluadas."
+    )
+    if ctx["hallazgo_numerico"]:
+        c2 = ctx["hallazgo_numerico"]
+    elif ctx["objs_esp"]:
+        c2 = (
+            f"Respecto a los objetivos específicos planteados, particularmente {ctx['objs_esp'][0].rstrip('.').lower()}, "
+            "los registros obtenidos respaldan la consistencia del procedimiento experimental empleado."
+        )
+    else:
+        c2 = (
+            "El procesamiento de los datos experimentales y el análisis de propagación de incertezas demostraron "
+            "que las mediciones realizadas presentan repetibilidad y concordancia con los principios teóricos."
+        )
+    c3 = (
+        "Se determinó que la precisión de los resultados depende directamente de la correcta calibración de los "
+        "equipos utilizados y del control riguroso de las condiciones experimentales durante la toma de datos."
+    )
+    return [c1, c2, c3]
+
+
+def generar_reflexion_automatica(datos: dict) -> str:
+    """Genera una Reflexión Argumentada vinculando la práctica con la carrera profesional."""
+    ctx = _extraer_contexto_practica(datos)
+    return (
+        f"La ejecución de la práctica «{ctx['titulo']}» aporta competencias directamente transferibles al "
+        f"ejercicio profesional en {ctx['escuela']}. En el ámbito laboral y de investigación aplicada, la toma "
+        "de decisiones técnicas exige respaldar cada diagnóstico con mediciones confiables, control de calidad "
+        "instrumental y evaluación crítica del margen de error, evitando asumir condiciones ideales sin "
+        "verificación empírica previa."
+    )
+
+
+# ==============================================================================
 # BLOQUE 2: GENERADOR DE GRÁFICOS CIENTÍFICOS APA 7 (300 DPI)
 # ==============================================================================
 
@@ -244,7 +412,6 @@ def generar_grafico_apa7_png(
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
-    # Estilo APA 7: quitar bordes superior y derecho
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_color("#1e293b")
@@ -325,7 +492,6 @@ def generar_grafico_apa7_png(
         nota_sugerida = f"Nota. Comparación experimental de {eje_y_label or 'la variable evaluada'} según {eje_x_label or 'cada condición'}."
 
     else:
-        # Gráficos numéricos XY (Dispersión + Ajuste Lineal o Líneas y Marcadores)
         x_num = pd.to_numeric(df_datos[col_x], errors="coerce")
         y1_num = pd.to_numeric(df_datos[col_y1], errors="coerce")
         mask1 = x_num.notna() & y1_num.notna()
@@ -367,7 +533,6 @@ def generar_grafico_apa7_png(
             ax.legend(frameon=False, fontsize=9.5, loc="best")
 
         else:
-            # Líneas y Marcadores (ideal para evolución temporal o comparación de grupos)
             ax.plot(
                 xs,
                 ys1,
@@ -419,12 +584,7 @@ def generar_grafico_apa7_png(
 # ==============================================================================
 
 def _filtrar_tabla_valida(tabla_dict: dict) -> tuple[list, list]:
-    """
-    Filtra una tabla para el Word final:
-    - Elimina filas donde todas las celdas de datos (excepto un posible índice 1, 2, 3) estén vacías.
-    - Elimina columnas que hayan quedado completamente vacías en todas las filas válidas.
-    - Si no queda ninguna fila con datos reales, devuelve ([], []) para que la tabla desaparezca.
-    """
+    """Filtra filas y columnas vacías; devuelve ([], []) si la tabla no tiene datos reales."""
     if not tabla_dict:
         return [], []
     headers = list(tabla_dict.get("headers", []))
@@ -435,11 +595,9 @@ def _filtrar_tabla_valida(tabla_dict: dict) -> tuple[list, list]:
     filas_validas = []
     for r in rows:
         celdas = [str(c).strip() if c is not None else "" for c in r]
-        # Si la primera columna es solo un número correlativo ('1', '2', '3') y el resto está vacío, ignorar fila
         if len(celdas) > 1 and celdas[0].isdigit() and all(c == "" for c in celdas[1:]):
             continue
         if any(c != "" for c in celdas):
-            # Asegurar misma longitud que headers
             while len(celdas) < len(headers):
                 celdas.append("")
             filas_validas.append(celdas[: len(headers)])
@@ -447,7 +605,6 @@ def _filtrar_tabla_valida(tabla_dict: dict) -> tuple[list, list]:
     if not filas_validas:
         return [], []
 
-    # Mantener solo columnas que tengan encabezado no vacío y al menos un dato en las filas válidas
     cols_con_datos = []
     for j, h in enumerate(headers):
         h_str = str(h).strip()
@@ -488,6 +645,44 @@ def _agregar_numero_pagina_apa7(section):
     run._r.append(instrText)
     run._r.append(fldChar2)
     run._r.append(fldChar3)
+
+
+def _insertar_caja_advertencia_word(doc, texto_advertencia: str):
+    """
+    Inserta un recuadro de advertencia altamente visible (fondo ámbar claro, borde grueso
+    naranja oscuro y texto en negrita) al inicio de cualquier apartado autogenerado.
+    """
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    p.paragraph_format.space_before = Pt(4)
+    p.paragraph_format.space_after = Pt(6)
+    p.paragraph_format.line_spacing = 1.25
+    p.paragraph_format.left_indent = Cm(0.3)
+    p.paragraph_format.right_indent = Cm(0.3)
+    p.paragraph_format.keep_with_next = True
+
+    pPr = p._p.get_or_add_pPr()
+    shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FEF3C7"/>')
+    pBdr = parse_xml(
+        f'<w:pBdr {nsdecls("w")}>'
+        '<w:top w:val="single" w:sz="8" w:space="4" w:color="D97706"/>'
+        '<w:left w:val="single" w:sz="24" w:space="8" w:color="B45309"/>'
+        '<w:bottom w:val="single" w:sz="8" w:space="4" w:color="D97706"/>'
+        '<w:right w:val="single" w:sz="8" w:space="4" w:color="D97706"/>'
+        "</w:pBdr>"
+    )
+    pPr.append(shd)
+    pPr.append(pBdr)
+
+    r_tag = p.add_run("⚠ ")
+    r_tag.bold = True
+    r_tag.font.size = Pt(11)
+    r_tag.font.color.rgb = RGBColor(0x92, 0x40, 0x0E)
+
+    r_txt = p.add_run(texto_advertencia)
+    r_txt.bold = True
+    r_txt.font.size = Pt(10.5)
+    r_txt.font.color.rgb = RGBColor(0x78, 0x35, 0x0F)
 
 
 def _aplicar_bordes_tabla_apa7(table):
@@ -615,10 +810,44 @@ def _insertar_figura_apa7(doc, numero_figura: int, titulo_cursiva: str, img_b64:
         return False
 
 
+def obtener_estado_secciones_importantes(datos: dict) -> dict:
+    """Evalúa qué apartados importantes están vacíos y requieren autocompletado con advertencia."""
+    resumen_vacio = not bool((datos.get("resumen") or "").strip())
+    intro_vacia = not bool((datos.get("introduccionTeoria") or "").strip())
+    t3_h, t3_r = _filtrar_tabla_valida(datos.get("tablaResultados", {}))
+    resultados_vacios = not bool(t3_r or (datos.get("figura2Img") or "").strip() or (datos.get("discusionTexto") or "").strip())
+    conclusiones_vacias = not any(limpiar_prefijo_lista(x) for x in datos.get("conclusiones", []))
+    reflexion_vacia = not bool((datos.get("reflexionTexto") or "").strip())
+
+    auto_lista = []
+    if resumen_vacio:
+        auto_lista.append("1. Resumen")
+    if intro_vacia:
+        auto_lista.append("2. Introducción")
+    if resultados_vacios:
+        auto_lista.append("4. Resultados y Discusión")
+    if conclusiones_vacias:
+        auto_lista.append("5. Conclusiones")
+    if reflexion_vacia:
+        auto_lista.append("6. Reflexión Argumentada")
+
+    return {
+        "resumen_auto": resumen_vacio,
+        "intro_auto": intro_vacia,
+        "resultados_auto": resultados_vacios,
+        "conclusiones_auto": conclusiones_vacias,
+        "reflexion_auto": reflexion_vacia,
+        "secciones_auto": auto_lista,
+    }
+
+
 def generar_docx_bytes(datos: dict) -> bytes:
     """
-    Genera el documento Word (.docx) oficial UNJBG en formato APA 7.ª edición.
-    Regla estricta: Toda opción, tabla, figura o sección vacía desaparece del Word final.
+    Genera el documento Word (.docx) oficial UNJBG en formato APA 7.ª edición:
+    - Si apartados importantes (Resumen, Introducción, Resultados/Discusión, Conclusiones, Reflexión)
+      no fueron llenados, los completa automáticamente con redacción académica contextualizada
+      colocando una advertencia visible al inicio.
+    - Los apartados y campos opcionales vacíos desaparecen del documento final.
     """
     doc = Document()
     _configurar_idioma_espanol(doc)
@@ -660,7 +889,6 @@ def generar_docx_bytes(datos: dict) -> bytes:
             p_fac.add_run("Escuela Profesional: ").bold = True
             p_fac.add_run(escuela_val)
 
-    # ESCUDO OFICIAL UNJBG CENTRADO INMEDIATAMENTE DESPUÉS DE ESCUELA PROFESIONAL
     logo_data = obtener_logo_bytes()
     if logo_data:
         p_logo = doc.add_paragraph()
@@ -702,7 +930,6 @@ def generar_docx_bytes(datos: dict) -> bytes:
             p_a = doc.add_paragraph(autor, style="List Bullet")
             p_a.paragraph_format.line_spacing = 1.5
 
-    # Metadatos opcionales de la carátula: solo se agregan las líneas efectivamente llenadas
     lineas_meta = []
     grupo_val = limpiar_texto_placeholder(c.get("grupo", ""))
     horario_val = limpiar_texto_placeholder(c.get("horario", ""))
@@ -744,7 +971,15 @@ def generar_docx_bytes(datos: dict) -> bytes:
 
     doc.add_page_break()
 
-    # Contadores correlativos APA 7 para tablas y figuras realmente incluidas
+    estado_auto = obtener_estado_secciones_importantes(datos)
+    if estado_auto["secciones_auto"]:
+        _insertar_caja_advertencia_word(
+            doc,
+            "AVISO DE AUTOCOMPLETADO: Los siguientes apartados importantes no fueron llenados en el formulario "
+            f"y se completaron automáticamente con contenido preliminar: {', '.join(estado_auto['secciones_auto'])}. "
+            "Revíselos y reemplácelos o ajústelos antes de presentar su informe final.",
+        )
+
     contador_tabla = 0
     contador_figura = 0
 
@@ -776,38 +1011,46 @@ def generar_docx_bytes(datos: dict) -> bytes:
                 if sangria:
                     p.paragraph_format.first_line_indent = Cm(1.27)
 
-    # 1. RESUMEN (solo si tiene texto)
+    # 1. RESUMEN (Importante: si está vacío se autogenera con advertencia visible)
+    add_apa_h1("1. Resumen")
     resumen_val = (datos.get("resumen") or "").strip()
     if resumen_val:
-        add_apa_h1("1. Resumen")
         add_apa_parrafos(resumen_val, sangria=False)
+    else:
+        _insertar_caja_advertencia_word(doc, ADVERTENCIA_SECCION_AUTO)
+        add_apa_parrafos(generar_resumen_automatico(datos), sangria=False)
 
-    # 2. INTRODUCCIÓN Y OBJETIVOS (solo si hay teoría u objetivos llenados)
+    # 2. INTRODUCCIÓN Y OBJETIVOS (Importante: si está vacía se autogenera con advertencia visible)
+    add_apa_h1("2. Introducción")
     intro_val = (datos.get("introduccionTeoria") or "").strip()
     obj_gen_val = (datos.get("objetivoGeneral") or "").strip()
     objs_esp_validos = [limpiar_prefijo_lista(o) for o in datos.get("objetivosEspecificos", []) if limpiar_prefijo_lista(o)]
 
-    if intro_val or obj_gen_val or objs_esp_validos:
-        add_apa_h1("2. Introducción")
-        if intro_val:
-            add_apa_parrafos(intro_val, sangria=True)
+    if intro_val:
+        add_apa_parrafos(intro_val, sangria=True)
+    else:
+        _insertar_caja_advertencia_word(doc, ADVERTENCIA_SECCION_AUTO)
+        intro_auto_txt, obj_gen_auto_txt = generar_introduccion_automatica(datos)
+        add_apa_parrafos(intro_auto_txt, sangria=True)
+        if not obj_gen_val:
+            obj_gen_val = obj_gen_auto_txt
 
-        if obj_gen_val or objs_esp_validos:
-            add_apa_h2("Objetivos")
-            if obj_gen_val:
-                p_og = doc.add_paragraph()
-                p_og.paragraph_format.first_line_indent = Cm(1.27)
-                p_og.add_run("Objetivo General: ").bold = True
-                p_og.add_run(obj_gen_val)
+    if obj_gen_val or objs_esp_validos:
+        add_apa_h2("Objetivos")
+        if obj_gen_val:
+            p_og = doc.add_paragraph()
+            p_og.paragraph_format.first_line_indent = Cm(1.27)
+            p_og.add_run("Objetivo General: ").bold = True
+            p_og.add_run(obj_gen_val)
 
-            if objs_esp_validos:
-                p_oe = doc.add_paragraph()
-                p_oe.paragraph_format.keep_with_next = True
-                p_oe.add_run("Objetivos Específicos:").bold = True
-                for obj in objs_esp_validos:
-                    doc.add_paragraph(obj, style="List Bullet")
+        if objs_esp_validos:
+            p_oe = doc.add_paragraph()
+            p_oe.paragraph_format.keep_with_next = True
+            p_oe.add_run("Objetivos Específicos:").bold = True
+            for obj in objs_esp_validos:
+                doc.add_paragraph(obj, style="List Bullet")
 
-    # 3. MATERIALES Y DESARROLLO EXPERIMENTAL
+    # 3. MATERIALES Y DESARROLLO EXPERIMENTAL (solo muestra subsecciones con contenido)
     mat_texto_val = (datos.get("materialesTexto") or "").strip()
     mat_filas_raw = [
         m for m in datos.get("materialesTabla", [])
@@ -881,14 +1124,13 @@ def generar_docx_bytes(datos: dict) -> bytes:
                     nota_pie=datos.get("notaTablaCruda", ""),
                 )
 
-    # 4. RESULTADOS Y DISCUSIÓN
+    # 4. RESULTADOS Y DISCUSIÓN (Importante: si está completamente vacío, se autogenera con advertencia)
     t3_headers, t3_rows = _filtrar_tabla_valida(datos.get("tablaResultados", {}))
     fig2_img_val = (datos.get("figura2Img") or "").strip()
     disc_texto_val = (datos.get("discusionTexto") or "").strip()
 
+    add_apa_h1("4. Resultados y Discusión")
     if t3_rows or fig2_img_val or disc_texto_val:
-        add_apa_h1("4. Resultados y Discusión")
-
         if t3_rows:
             contador_tabla += 1
             _insertar_tabla_apa7(
@@ -912,28 +1154,39 @@ def generar_docx_bytes(datos: dict) -> bytes:
 
         if disc_texto_val:
             add_apa_parrafos(disc_texto_val, sangria=True)
+    else:
+        _insertar_caja_advertencia_word(doc, ADVERTENCIA_SECCION_AUTO)
+        add_apa_parrafos(generar_discusion_automatica(datos), sangria=True)
 
-    # 5. CONCLUSIONES (sin doble numeración y ocultando fuentes de error si está vacío)
+    # 5. CONCLUSIONES (Importante: si está vacío se autogenera con advertencia visible)
     conclusiones_validas = [limpiar_prefijo_lista(x) for x in datos.get("conclusiones", []) if limpiar_prefijo_lista(x)]
     fuentes_error_val = limpiar_prefijo_lista(datos.get("fuentesError", ""))
 
-    if conclusiones_validas or fuentes_error_val:
-        add_apa_h1("5. Conclusiones")
+    add_apa_h1("5. Conclusiones")
+    if conclusiones_validas:
         for con in conclusiones_validas:
             doc.add_paragraph(con, style="List Number")
-        if fuentes_error_val:
-            p_err = doc.add_paragraph()
-            p_err.paragraph_format.first_line_indent = Cm(1.27)
-            p_err.add_run("Fuentes de error y aproximaciones: ").bold = True
-            p_err.add_run(fuentes_error_val)
+    else:
+        _insertar_caja_advertencia_word(doc, ADVERTENCIA_SECCION_AUTO)
+        for con_auto in generar_conclusiones_automaticas(datos):
+            doc.add_paragraph(con_auto, style="List Number")
 
-    # 6. REFLEXIÓN ARGUMENTADA (desaparece si está vacía)
+    if fuentes_error_val:
+        p_err = doc.add_paragraph()
+        p_err.paragraph_format.first_line_indent = Cm(1.27)
+        p_err.add_run("Fuentes de error y aproximaciones: ").bold = True
+        p_err.add_run(fuentes_error_val)
+
+    # 6. REFLEXIÓN ARGUMENTADA (Importante: si está vacía se autogenera con advertencia visible)
+    add_apa_h1("6. Reflexión Argumentada")
     reflexion_val = (datos.get("reflexionTexto") or "").strip()
     if reflexion_val:
-        add_apa_h1("6. Reflexión Argumentada")
         add_apa_parrafos(reflexion_val, sangria=True)
+    else:
+        _insertar_caja_advertencia_word(doc, ADVERTENCIA_SECCION_AUTO)
+        add_apa_parrafos(generar_reflexion_automatica(datos), sangria=True)
 
-    # 7. REFERENCIAS (desaparece si no hay referencias)
+    # 7. REFERENCIAS (se omite si no hay referencias para no fabricar citas falsas)
     refs_validas = [limpiar_texto_placeholder(r) for r in datos.get("referencias", []) if limpiar_texto_placeholder(r)]
     if refs_validas:
         add_apa_h1("7. Referencias")
@@ -974,7 +1227,7 @@ def generar_docx_bytes(datos: dict) -> bytes:
 
 
 def generar_markdown_str(datos: dict) -> str:
-    """Genera el informe en Markdown omitiendo secciones y campos opcionales vacíos."""
+    """Genera el informe en Markdown con autocompletado y advertencia en apartados importantes vacíos."""
     c = datos.get("caratula", {})
     lineas = ['<div align="center">', "", "# UNIVERSIDAD NACIONAL JORGE BASADRE GROHMANN", ""]
 
@@ -1001,20 +1254,38 @@ def generar_markdown_str(datos: dict) -> str:
         lineas.append("\n**Autores:**")
         lineas.extend([f"- {a}" for a in autores])
 
-    if (datos.get("resumen") or "").strip():
-        lineas.extend(["\n## 1. Resumen", datos["resumen"].strip()])
-    if (datos.get("introduccionTeoria") or "").strip():
-        lineas.extend(["\n## 2. Introducción", datos["introduccionTeoria"].strip()])
-    if (datos.get("discusionTexto") or "").strip():
-        lineas.extend(["\n## 4. Resultados y Discusión", datos["discusionTexto"].strip()])
+    res_val = (datos.get("resumen") or "").strip()
+    if res_val:
+        lineas.extend(["\n## 1. Resumen", res_val])
+    else:
+        lineas.extend(["\n## 1. Resumen", f"> **⚠️ {ADVERTENCIA_SECCION_AUTO}**\n", generar_resumen_automatico(datos)])
+
+    intro_val = (datos.get("introduccionTeoria") or "").strip()
+    if intro_val:
+        lineas.extend(["\n## 2. Introducción", intro_val])
+    else:
+        intro_a, _ = generar_introduccion_automatica(datos)
+        lineas.extend(["\n## 2. Introducción", f"> **⚠️ {ADVERTENCIA_SECCION_AUTO}**\n", intro_a])
+
+    disc_val = (datos.get("discusionTexto") or "").strip()
+    if disc_val:
+        lineas.extend(["\n## 4. Resultados y Discusión", disc_val])
+    else:
+        lineas.extend(["\n## 4. Resultados y Discusión", f"> **⚠️ {ADVERTENCIA_SECCION_AUTO}**\n", generar_discusion_automatica(datos)])
 
     concls = [limpiar_prefijo_lista(x) for x in datos.get("conclusiones", []) if limpiar_prefijo_lista(x)]
+    lineas.append("\n## 5. Conclusiones")
     if concls:
-        lineas.append("\n## 5. Conclusiones")
         lineas.extend([f"{i+1}. {x}" for i, x in enumerate(concls)])
+    else:
+        lineas.append(f"> **⚠️ {ADVERTENCIA_SECCION_AUTO}**\n")
+        lineas.extend([f"{i+1}. {x}" for i, x in enumerate(generar_conclusiones_automaticas(datos))])
 
-    if (datos.get("reflexionTexto") or "").strip():
-        lineas.extend(["\n## 6. Reflexión Argumentada", datos["reflexionTexto"].strip()])
+    refl_val = (datos.get("reflexionTexto") or "").strip()
+    if refl_val:
+        lineas.extend(["\n## 6. Reflexión Argumentada", refl_val])
+    else:
+        lineas.extend(["\n## 6. Reflexión Argumentada", f"> **⚠️ {ADVERTENCIA_SECCION_AUTO}**\n", generar_reflexion_automatica(datos)])
 
     refs = [limpiar_texto_placeholder(r) for r in datos.get("referencias", []) if limpiar_texto_placeholder(r)]
     if refs:
@@ -1025,26 +1296,59 @@ def generar_markdown_str(datos: dict) -> str:
 
 
 def generar_latex_str(datos: dict) -> str:
-    """Genera el código fuente LaTeX (.tex) con formato APA 7 omitiendo secciones vacías."""
+    """Genera el código fuente LaTeX (.tex) con advertencia en apartados importantes autogenerados."""
     c = datos.get("caratula", {})
     autores = [limpiar_texto_placeholder(a) for a in datos.get("autores", []) if limpiar_texto_placeholder(a)]
     autores_tex = "\n".join([f"  \\item {a}" for a in autores])
 
     cuerpo = []
-    if (datos.get("resumen") or "").strip():
-        cuerpo.append(f"\\section*{{1. Resumen}}\n\\noindent {datos['resumen'].strip()}")
-    if (datos.get("introduccionTeoria") or "").strip():
-        cuerpo.append(f"\\section*{{2. Introducción}}\n{datos['introduccionTeoria'].strip()}")
-    if (datos.get("discusionTexto") or "").strip():
-        cuerpo.append(f"\\section*{{4. Resultados y Discusión}}\n{datos['discusionTexto'].strip()}")
+    res_val = (datos.get("resumen") or "").strip()
+    if res_val:
+        cuerpo.append(f"\\section*{{1. Resumen}}\n\\noindent {res_val}")
+    else:
+        cuerpo.append(
+            f"\\section*{{1. Resumen}}\n\\noindent\\fbox{{\\parbox{{0.97\\textwidth}}{{\\textbf{{{ADVERTENCIA_SECCION_AUTO}}}}}}}\\\\[0.3cm]\n"
+            f"\\noindent {generar_resumen_automatico(datos)}"
+        )
+
+    intro_val = (datos.get("introduccionTeoria") or "").strip()
+    if intro_val:
+        cuerpo.append(f"\\section*{{2. Introducción}}\n{intro_val}")
+    else:
+        intro_a, _ = generar_introduccion_automatica(datos)
+        cuerpo.append(
+            f"\\section*{{2. Introducción}}\n\\noindent\\fbox{{\\parbox{{0.97\\textwidth}}{{\\textbf{{{ADVERTENCIA_SECCION_AUTO}}}}}}}\\\\[0.3cm]\n"
+            f"{intro_a}"
+        )
+
+    disc_val = (datos.get("discusionTexto") or "").strip()
+    if disc_val:
+        cuerpo.append(f"\\section*{{4. Resultados y Discusión}}\n{disc_val}")
+    else:
+        cuerpo.append(
+            f"\\section*{{4. Resultados y Discusión}}\n\\noindent\\fbox{{\\parbox{{0.97\\textwidth}}{{\\textbf{{{ADVERTENCIA_SECCION_AUTO}}}}}}}\\\\[0.3cm]\n"
+            f"{generar_discusion_automatica(datos)}"
+        )
 
     concls = [limpiar_prefijo_lista(x) for x in datos.get("conclusiones", []) if limpiar_prefijo_lista(x)]
     if concls:
         items_c = "\n".join([f"  \\item {x}" for x in concls])
         cuerpo.append(f"\\section*{{5. Conclusiones}}\n\\begin{{enumerate}}\n{items_c}\n\\end{{enumerate}}")
+    else:
+        items_c = "\n".join([f"  \\item {x}" for x in generar_conclusiones_automaticas(datos)])
+        cuerpo.append(
+            f"\\section*{{5. Conclusiones}}\n\\noindent\\fbox{{\\parbox{{0.97\\textwidth}}{{\\textbf{{{ADVERTENCIA_SECCION_AUTO}}}}}}}\\\\[0.3cm]\n"
+            f"\\begin{{enumerate}}\n{items_c}\n\\end{{enumerate}}"
+        )
 
-    if (datos.get("reflexionTexto") or "").strip():
-        cuerpo.append(f"\\section*{{6. Reflexión Argumentada}}\n{datos['reflexionTexto'].strip()}")
+    refl_val = (datos.get("reflexionTexto") or "").strip()
+    if refl_val:
+        cuerpo.append(f"\\section*{{6. Reflexión Argumentada}}\n{refl_val}")
+    else:
+        cuerpo.append(
+            f"\\section*{{6. Reflexión Argumentada}}\n\\noindent\\fbox{{\\parbox{{0.97\\textwidth}}{{\\textbf{{{ADVERTENCIA_SECCION_AUTO}}}}}}}\\\\[0.3cm]\n"
+            f"{generar_reflexion_automatica(datos)}"
+        )
 
     refs = [limpiar_texto_placeholder(r) for r in datos.get("referencias", []) if limpiar_texto_placeholder(r)]
     if refs:
@@ -1106,10 +1410,6 @@ def generar_json_str(datos: dict) -> str:
 # ==============================================================================
 
 def obtener_estado_inicial() -> dict:
-    """
-    Estado inicial limpio: ningún campo contiene textos de relleno falsos que puedan
-    colarse por error en el archivo Word si el usuario decide dejarlos vacíos.
-    """
     return {
         "caratula": {
             "facultad": "",
@@ -1377,8 +1677,17 @@ def main():
     st.title("Generador de Informes de Laboratorio - UNJBG")
     st.markdown(
         "Formato oficial de la **Universidad Nacional Jorge Basadre Grohmann** "
-        "adaptado a **APA 7.ª Edición** *(todo campo opcional o vacío se omite automáticamente en el Word final)*."
+        "adaptado a **APA 7.ª Edición**."
     )
+
+    estado_imp = obtener_estado_secciones_importantes(datos)
+    if estado_imp["secciones_auto"]:
+        st.warning(
+            f"**Apartados importantes sin llenar ({', '.join(estado_imp['secciones_auto'])}):** "
+            "Al exportar, se rellenarán automáticamente con redacción académica propia basada en tu práctica, "
+            "incluyendo un **recuadro de advertencia visible al inicio** de cada apartado. "
+            "Los apartados opcionales vacíos desaparecerán."
+        )
 
     col_d1, col_d2, col_d3 = st.columns(3)
     docx_bytes = generar_docx_bytes(datos)
@@ -1555,11 +1864,21 @@ def main():
     with tabs[1]:
         st.subheader("1. Resumen")
         mostrar_guia("resumen")
+        if not datos["resumen"].strip():
+            st.warning(
+                "Este apartado está vacío. Si lo dejas así, el Word incluirá automáticamente el siguiente "
+                "resumen preliminar precedido por un recuadro de advertencia visible:"
+            )
+            st.info(generar_resumen_automatico(datos))
+            if st.button("Insertar este borrador en el editor para personalizarlo", key="btn_fill_resumen"):
+                datos["resumen"] = generar_resumen_automatico(datos)
+                st.rerun()
+
         datos["resumen"] = st.text_area(
             "Redacción del Resumen (párrafo único sin sangría en APA 7):",
             value=datos["resumen"],
             height=220,
-            placeholder="Redacte en tercera persona y tiempo pasado (~15 líneas). Si se deja vacío, no saldrá en el Word...",
+            placeholder="Redacte en tercera persona y tiempo pasado (~15 líneas). Si se deja vacío, se autogenerará con advertencia visible...",
         )
         lineas_aprox = math.ceil(len(datos["resumen"].strip()) / 85) if datos["resumen"].strip() else 0
         if 12 <= lineas_aprox <= 18:
@@ -1573,6 +1892,12 @@ def main():
     with tabs[2]:
         st.subheader("2. Introducción")
         mostrar_guia("introduccion")
+        if not datos["introduccionTeoria"].strip():
+            st.warning(
+                "Si dejas vacía la Introducción, se generará automáticamente un marco introductorio "
+                "contextualizado con una advertencia visible al inicio del apartado."
+            )
+
         datos["introduccionTeoria"] = st.text_area(
             "Motivación y Base Teórica (ecuaciones numeradas (1), (2)... y citas APA 7 (Autor, Año)):",
             value=datos["introduccionTeoria"],
@@ -1735,7 +2060,7 @@ def main():
 
         st.divider()
 
-        # --- NUEVA FUNCIÓN: GENERADOR DE GRÁFICOS CIENTÍFICOS APA 7 ---
+        # --- GENERADOR DE GRÁFICOS CIENTÍFICOS APA 7 ---
         st.markdown("### Generador de Gráficos Referentes al Tema (APA 7.ª Edición • 300 DPI)")
         st.caption(
             "Crea un gráfico profesional de tu experimento (dispersión con ajuste lineal y = mx + b, "
@@ -1860,6 +2185,18 @@ def main():
         st.subheader("5. Conclusiones")
         mostrar_guia("conclusiones")
 
+        tiene_conclusiones = any(limpiar_prefijo_lista(x) for x in datos["conclusiones"])
+        if not tiene_conclusiones:
+            concls_preview = generar_conclusiones_automaticas(datos)
+            st.warning(
+                "No has escrito conclusiones. Si lo dejas así, el Word se rellenará automáticamente con "
+                "conclusiones propias basadas en tu práctica y una **advertencia visible al inicio**:"
+            )
+            st.info("\n".join([f"{i+1}. {txt}" for i, txt in enumerate(concls_preview)]))
+            if st.button("Insertar estas conclusiones en el editor para editarlas", key="btn_fill_concl"):
+                datos["conclusiones"] = concls_preview
+                st.rerun()
+
         for idx, concl in enumerate(datos["conclusiones"]):
             cc1, cc2 = st.columns([10, 1])
             with cc1:
@@ -1882,7 +2219,7 @@ def main():
             "Análisis de posibles fuentes de error y aproximaciones respecto al caso ideal (opcional):",
             value=datos["fuentesError"],
             height=120,
-            placeholder="Si se deja vacío, este apartado desaparecerá del documento Word final...",
+            placeholder="Si se deja vacío, este apartado opcional desaparecerá del documento Word final...",
         )
 
     # ==========================================
@@ -1891,8 +2228,13 @@ def main():
     with tabs[6]:
         st.subheader("6. Reflexión Argumentada")
         mostrar_guia("reflexion")
+        if not datos["reflexionTexto"].strip():
+            st.warning(
+                "Si dejas este apartado en blanco, se rellenará automáticamente vinculando la práctica "
+                "con tu carrera profesional, precedido por una advertencia visible."
+            )
         datos["reflexionTexto"] = st.text_area(
-            "Relación de la teoría evaluada experimentalmente con el campo de acción profesional (opcional):",
+            "Relación de la teoría evaluada experimentalmente con el campo de acción profesional:",
             value=datos["reflexionTexto"],
             height=180,
         )
